@@ -1,0 +1,903 @@
+name: Build Launcher v5
+
+on:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.7'
+
+      - name: Create project files
+        run: |
+          mkdir -p app/src/main/java/com/example/mylauncher
+          mkdir -p app/src/main/res/values
+
+          cat > settings.gradle.kts <<'EOF'
+          pluginManagement {
+              repositories {
+                  google()
+                  mavenCentral()
+                  gradlePluginPortal()
+              }
+          }
+          dependencyResolutionManagement {
+              repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+              repositories {
+                  google()
+                  mavenCentral()
+              }
+          }
+          rootProject.name = "MyLauncher"
+          include(":app")
+          EOF
+
+          cat > build.gradle.kts <<'EOF'
+          plugins {
+              id("com.android.application") version "8.5.2" apply false
+              id("org.jetbrains.kotlin.android") version "1.9.24" apply false
+          }
+          EOF
+
+          cat > gradle.properties <<'EOF'
+          android.useAndroidX=true
+          org.gradle.jvmargs=-Xmx3g
+          EOF
+
+          cat > app/build.gradle.kts <<'EOF'
+          plugins {
+              id("com.android.application")
+              id("org.jetbrains.kotlin.android")
+          }
+
+          android {
+              namespace = "com.example.mylauncher"
+              compileSdk = 34
+
+              defaultConfig {
+                  applicationId = "com.example.mylauncher"
+                  minSdk = 26
+                  targetSdk = 34
+                  versionCode = 5
+                  versionName = "5.0"
+              }
+
+              compileOptions {
+                  sourceCompatibility = JavaVersion.VERSION_17
+                  targetCompatibility = JavaVersion.VERSION_17
+              }
+              kotlinOptions { jvmTarget = "17" }
+
+              buildFeatures { compose = true }
+              composeOptions { kotlinCompilerExtensionVersion = "1.5.14" }
+          }
+
+          dependencies {
+              implementation(platform("androidx.compose:compose-bom:2024.06.00"))
+              implementation("androidx.compose.ui:ui")
+              implementation("androidx.compose.foundation:foundation")
+              implementation("androidx.compose.material3:material3")
+              implementation("androidx.activity:activity-compose:1.9.0")
+              implementation("androidx.core:core-ktx:1.13.1")
+          }
+          EOF
+
+          cat > app/src/main/res/values/themes.xml <<'EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <resources>
+              <style name="Theme.MyLauncher" parent="android:Theme.Material.NoActionBar">
+                  <item name="android:windowShowWallpaper">true</item>
+                  <item name="android:windowBackground">@android:color/transparent</item>
+                  <item name="android:statusBarColor">@android:color/transparent</item>
+                  <item name="android:navigationBarColor">@android:color/transparent</item>
+              </style>
+          </resources>
+          EOF
+
+          cat > app/src/main/AndroidManifest.xml <<'EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+              <queries>
+                  <intent>
+                      <action android:name="android.intent.action.MAIN" />
+                      <category android:name="android.intent.category.LAUNCHER" />
+                  </intent>
+              </queries>
+
+              <application
+                  android:label="MyLauncher"
+                  android:theme="@style/Theme.MyLauncher">
+                  <activity
+                      android:name=".MainActivity"
+                      android:exported="true"
+                      android:launchMode="singleTask"
+                      android:stateNotNeeded="true">
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN" />
+                          <category android:name="android.intent.category.HOME" />
+                          <category android:name="android.intent.category.DEFAULT" />
+                      </intent-filter>
+                  </activity>
+                  <activity
+                      android:name=".SettingsActivity"
+                      android:label="Launcher Settings"
+                      android:exported="true"
+                      android:theme="@android:style/Theme.Material.NoActionBar">
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN" />
+                          <category android:name="android.intent.category.LAUNCHER" />
+                      </intent-filter>
+                  </activity>
+              </application>
+          </manifest>
+          EOF
+
+          cat > app/src/main/java/com/example/mylauncher/MainActivity.kt <<'EOF'
+          package com.example.mylauncher
+
+          import android.app.WallpaperColors
+          import android.app.WallpaperManager
+          import android.content.Context
+          import android.content.Intent
+          import android.content.SharedPreferences
+          import android.content.pm.PackageManager
+          import android.graphics.Bitmap
+          import android.graphics.drawable.AdaptiveIconDrawable
+          import android.graphics.drawable.Drawable
+          import android.os.BatteryManager
+          import android.os.Build
+          import android.os.Bundle
+          import android.widget.Toast
+          import androidx.activity.ComponentActivity
+          import androidx.activity.compose.BackHandler
+          import androidx.activity.compose.setContent
+          import androidx.activity.enableEdgeToEdge
+          import androidx.compose.animation.core.Spring
+          import androidx.compose.animation.core.animateFloatAsState
+          import androidx.compose.animation.core.spring
+          import androidx.compose.foundation.Image
+          import androidx.compose.foundation.background
+          import androidx.compose.foundation.border
+          import androidx.compose.foundation.clickable
+          import androidx.compose.foundation.gestures.detectDragGestures
+          import androidx.compose.foundation.gestures.detectTapGestures
+          import androidx.compose.foundation.gestures.detectVerticalDragGestures
+          import androidx.compose.foundation.layout.*
+          import androidx.compose.foundation.lazy.LazyColumn
+          import androidx.compose.foundation.lazy.items
+          import androidx.compose.foundation.lazy.grid.GridCells
+          import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+          import androidx.compose.foundation.lazy.grid.items
+          import androidx.compose.foundation.shape.RoundedCornerShape
+          import androidx.compose.foundation.text.BasicTextField
+          import androidx.compose.material3.*
+          import androidx.compose.runtime.*
+          import androidx.compose.ui.Alignment
+          import androidx.compose.ui.Modifier
+          import androidx.compose.ui.draw.clip
+          import androidx.compose.ui.draw.scale
+          import androidx.compose.ui.geometry.Offset
+          import androidx.compose.ui.graphics.*
+          import androidx.compose.ui.input.pointer.pointerInput
+          import androidx.compose.ui.layout.onGloballyPositioned
+          import androidx.compose.ui.layout.positionInParent
+          import androidx.compose.ui.platform.LocalContext
+          import androidx.compose.ui.text.TextStyle
+          import androidx.compose.ui.text.font.FontWeight
+          import androidx.compose.ui.text.style.TextAlign
+          import androidx.compose.ui.text.style.TextOverflow
+          import androidx.compose.ui.unit.Dp
+          import androidx.compose.ui.unit.dp
+          import androidx.compose.ui.unit.sp
+          import androidx.core.graphics.ColorUtils
+          import androidx.core.graphics.drawable.toBitmap
+          import kotlinx.coroutines.delay
+          import java.time.LocalDateTime
+          import java.time.format.DateTimeFormatter
+          import kotlin.math.abs
+
+          class App(val label: String, val pkg: String, val drawable: Drawable)
+
+          class Palette(val fg: Color, val glass: Color, val border: Color, val label: TextStyle)
+
+          private const val COLS = 4
+          private const val ROWS = 3
+          private const val MAX_HOME = COLS * ROWS
+
+          fun readList(prefs: SharedPreferences, key: String): List<String>? =
+              prefs.getString(key, null)?.split(",")?.filter { it.isNotEmpty() }
+
+          fun loadApps(pm: PackageManager, self: String): List<App> =
+              pm.queryIntentActivities(
+                  Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER), 0
+              )
+                  .map { App(it.loadLabel(pm).toString(), it.activityInfo.packageName, it.loadIcon(pm)) }
+                  .filter { it.pkg != self }
+                  .distinctBy { it.pkg }
+                  .sortedBy { it.label.lowercase() }
+
+          fun defaultDock(apps: List<App>): List<String> =
+              listOf("dialer", "messag", "chrome", "camera")
+                  .mapNotNull { k -> apps.firstOrNull { it.pkg.contains(k) }?.pkg }
+
+          fun defaultHome(apps: List<App>, dock: List<String>): List<String> =
+              apps.map { it.pkg }.filter { it !in dock }.take(MAX_HOME)
+
+          class MainActivity : ComponentActivity() {
+              private val apps = mutableStateOf<List<App>>(emptyList())
+              private val lightWallpaper = mutableStateOf(false)
+              private val version = mutableIntStateOf(0)
+              private var loaded: Set<String> = emptySet()
+
+              override fun onCreate(savedInstanceState: Bundle?) {
+                  super.onCreate(savedInstanceState)
+                  enableEdgeToEdge()
+                  refresh()
+                  val prefs = getSharedPreferences("launcher", MODE_PRIVATE)
+                  setContent {
+                      MaterialTheme(colorScheme = darkColorScheme()) {
+                          Launcher(apps.value, lightWallpaper.value, version.intValue, prefs) { pkg ->
+                              packageManager.getLaunchIntentForPackage(pkg)?.let { startActivity(it) }
+                          }
+                      }
+                  }
+              }
+
+              override fun onResume() {
+                  super.onResume()
+                  refresh()
+                  version.intValue = version.intValue + 1
+              }
+
+              private fun refresh() {
+                  val pm = packageManager
+                  val pkgs = pm.queryIntentActivities(
+                      Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER), 0
+                  ).map { it.activityInfo.packageName }.toSet()
+                  if (pkgs != loaded) {
+                      loaded = pkgs
+                      apps.value = loadApps(pm, packageName)
+                  }
+                  lightWallpaper.value = isWallpaperLight()
+              }
+
+              private fun isWallpaperLight(): Boolean {
+                  if (Build.VERSION.SDK_INT < 27) return false
+                  val colors = WallpaperManager.getInstance(this)
+                      .getWallpaperColors(WallpaperManager.FLAG_SYSTEM) ?: return false
+                  return if (Build.VERSION.SDK_INT >= 31) {
+                      (colors.colorHints and WallpaperColors.HINT_SUPPORTS_DARK_TEXT) != 0
+                  } else {
+                      ColorUtils.calculateLuminance(colors.primaryColor.toArgb()) > 0.55
+                  }
+              }
+          }
+
+          class SettingsActivity : ComponentActivity() {
+              override fun onCreate(savedInstanceState: Bundle?) {
+                  super.onCreate(savedInstanceState)
+                  enableEdgeToEdge()
+                  val prefs = getSharedPreferences("launcher", MODE_PRIVATE)
+                  val apps = loadApps(packageManager, packageName)
+                  setContent {
+                      MaterialTheme(colorScheme = darkColorScheme()) {
+                          Surface(Modifier.fillMaxSize()) { SettingsScreen(apps, prefs) }
+                      }
+                  }
+              }
+          }
+
+          @Composable
+          fun SettingsScreen(apps: List<App>, prefs: SharedPreferences) {
+              val context = LocalContext.current
+              var labels by remember { mutableIntStateOf(prefs.getInt("labels", 0)) }
+              var iconSize by remember { mutableFloatStateOf(prefs.getFloat("iconSize", 58f)) }
+              var clockSize by remember { mutableFloatStateOf(prefs.getFloat("clockSize", 100f)) }
+              var clockWeight by remember { mutableIntStateOf(prefs.getInt("clockWeight", 1)) }
+              var clock24 by remember { mutableStateOf(prefs.getBoolean("clock24", true)) }
+              var showCard by remember { mutableStateOf(prefs.getBoolean("showCard", true)) }
+              val dock = remember {
+                  mutableStateListOf<String>().apply { addAll(readList(prefs, "dock") ?: defaultDock(apps)) }
+              }
+              val home = remember {
+                  mutableStateListOf<String>().apply {
+                      addAll(readList(prefs, "home") ?: defaultHome(apps, dock))
+                  }
+              }
+
+              fun saveLists() {
+                  prefs.edit()
+                      .putString("dock", dock.joinToString(","))
+                      .putString("home", home.joinToString(","))
+                      .apply()
+              }
+
+              LazyColumn(Modifier.fillMaxSize().systemBarsPadding().padding(horizontal = 16.dp)) {
+                  item {
+                      Text(
+                          "Launcher settings",
+                          fontSize = 26.sp,
+                          fontWeight = FontWeight.Bold,
+                          modifier = Modifier.padding(vertical = 16.dp)
+                      )
+                  }
+
+                  item { SectionTitle("Wallpaper") }
+                  item {
+                      Button(onClick = {
+                          try {
+                              context.startActivity(
+                                  Intent.createChooser(Intent(Intent.ACTION_SET_WALLPAPER), "Choose wallpaper")
+                              )
+                          } catch (e: Exception) {
+                              Toast.makeText(context, "No wallpaper picker found", Toast.LENGTH_SHORT).show()
+                          }
+                      }) { Text("Change wallpaper") }
+                  }
+
+                  item { SectionTitle("Clock") }
+                  item { Text("Size") }
+                  item {
+                      Slider(
+                          value = clockSize,
+                          onValueChange = {
+                              clockSize = it
+                              prefs.edit().putFloat("clockSize", it).apply()
+                          },
+                          valueRange = 60f..130f
+                      )
+                  }
+                  item { Text("Weight") }
+                  item { Choice("Light", clockWeight == 0) { clockWeight = 0; prefs.edit().putInt("clockWeight", 0).apply() } }
+                  item { Choice("Semi-bold", clockWeight == 1) { clockWeight = 1; prefs.edit().putInt("clockWeight", 1).apply() } }
+                  item { Choice("Bold", clockWeight == 2) { clockWeight = 2; prefs.edit().putInt("clockWeight", 2).apply() } }
+                  item {
+                      SwitchRow("24-hour time", clock24) {
+                          clock24 = it
+                          prefs.edit().putBoolean("clock24", it).apply()
+                      }
+                  }
+                  item {
+                      SwitchRow("Show info card", showCard) {
+                          showCard = it
+                          prefs.edit().putBoolean("showCard", it).apply()
+                      }
+                  }
+
+                  item { SectionTitle("Icons and labels") }
+                  item { Text("Icon size") }
+                  item {
+                      Slider(
+                          value = iconSize,
+                          onValueChange = {
+                              iconSize = it
+                              prefs.edit().putFloat("iconSize", it).apply()
+                          },
+                          valueRange = 44f..72f
+                      )
+                  }
+                  item { Text("Label colors") }
+                  item { Choice("Auto (follows wallpaper)", labels == 0) { labels = 0; prefs.edit().putInt("labels", 0).apply() } }
+                  item { Choice("White", labels == 1) { labels = 1; prefs.edit().putInt("labels", 1).apply() } }
+                  item { Choice("Dark", labels == 2) { labels = 2; prefs.edit().putInt("labels", 2).apply() } }
+
+                  item { SectionTitle("Home screen and dock apps") }
+                  item {
+                      Text(
+                          "Home: " + home.size + "/" + MAX_HOME + "    Dock: " + dock.size + "/4",
+                          fontSize = 13.sp,
+                          color = Color(0xFFAAAAAA)
+                      )
+                  }
+                  items(apps, key = { it.pkg }) { app ->
+                      Row(
+                          Modifier.fillMaxWidth().padding(vertical = 6.dp),
+                          verticalAlignment = Alignment.CenterVertically
+                      ) {
+                          AppIcon(app, 40.dp)
+                          Text(
+                              app.label,
+                              Modifier.weight(1f).padding(horizontal = 12.dp),
+                              maxLines = 1,
+                              overflow = TextOverflow.Ellipsis
+                          )
+                          Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                              Text("Home", fontSize = 10.sp)
+                              Checkbox(
+                                  checked = app.pkg in home,
+                                  onCheckedChange = { on ->
+                                      if (on) {
+                                          if (home.size < MAX_HOME && app.pkg !in home) home.add(app.pkg)
+                                      } else {
+                                          home.remove(app.pkg)
+                                      }
+                                      saveLists()
+                                  }
+                              )
+                          }
+                          Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                              Text("Dock", fontSize = 10.sp)
+                              Checkbox(
+                                  checked = app.pkg in dock,
+                                  onCheckedChange = { on ->
+                                      if (on) {
+                                          if (dock.size < 4 && app.pkg !in dock) dock.add(app.pkg)
+                                      } else {
+                                          dock.remove(app.pkg)
+                                      }
+                                      saveLists()
+                                  }
+                              )
+                          }
+                      }
+                  }
+                  item { Spacer(Modifier.height(32.dp)) }
+              }
+          }
+
+          @Composable
+          fun SectionTitle(text: String) {
+              Text(
+                  text,
+                  color = Color(0xFF7FB2FF),
+                  fontSize = 14.sp,
+                  fontWeight = FontWeight.SemiBold,
+                  modifier = Modifier.padding(top = 24.dp, bottom = 8.dp)
+              )
+          }
+
+          @Composable
+          fun Choice(label: String, selected: Boolean, onClick: () -> Unit) {
+              Row(
+                  Modifier.fillMaxWidth().clickable(onClick = onClick),
+                  verticalAlignment = Alignment.CenterVertically
+              ) {
+                  RadioButton(selected = selected, onClick = onClick)
+                  Text(label)
+              }
+          }
+
+          @Composable
+          fun SwitchRow(label: String, checked: Boolean, onChange: (Boolean) -> Unit) {
+              Row(
+                  Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                  verticalAlignment = Alignment.CenterVertically
+              ) {
+                  Text(label, Modifier.weight(1f))
+                  Switch(checked = checked, onCheckedChange = onChange)
+              }
+          }
+
+          @Composable
+          fun Launcher(
+              apps: List<App>,
+              lightWallpaper: Boolean,
+              version: Int,
+              prefs: SharedPreferences,
+              launch: (String) -> Unit
+          ) {
+              val context = LocalContext.current
+
+              // Settings are re-read whenever the launcher comes back to the front.
+              val mode = remember(version) { prefs.getInt("labels", 0) }
+              val iconSize = remember(version) { prefs.getFloat("iconSize", 58f).dp }
+              val clockSize = remember(version) { prefs.getFloat("clockSize", 100f) }
+              val clockWeight = remember(version) { prefs.getInt("clockWeight", 1) }
+              val clock24 = remember(version) { prefs.getBoolean("clock24", true) }
+              val showCard = remember(version) { prefs.getBoolean("showCard", true) }
+
+              val darkText = when (mode) { 1 -> false; 2 -> true; else -> lightWallpaper }
+              val fg = if (darkText) Color(0xFF111111) else Color.White
+              val pal = Palette(
+                  fg = fg,
+                  glass = if (darkText) Color.Black.copy(alpha = 0.10f) else Color.White.copy(alpha = 0.20f),
+                  border = if (darkText) Color.Black.copy(alpha = 0.18f) else Color.White.copy(alpha = 0.35f),
+                  label = TextStyle(
+                      color = fg,
+                      shadow = if (darkText) null else Shadow(Color.Black.copy(alpha = 0.45f), Offset(0f, 2f), 6f)
+                  )
+              )
+
+              val dock = remember(version) {
+                  mutableStateListOf<String>().apply { addAll(readList(prefs, "dock") ?: defaultDock(apps)) }
+              }
+              val home = remember(version) {
+                  mutableStateListOf<String>().apply {
+                      addAll(readList(prefs, "home") ?: defaultHome(apps, dock))
+                  }
+              }
+              var drawerOpen by remember { mutableStateOf(false) }
+              var menuApp by remember { mutableStateOf<App?>(null) }
+
+              fun save() {
+                  prefs.edit()
+                      .putString("dock", dock.joinToString(","))
+                      .putString("home", home.joinToString(","))
+                      .apply()
+              }
+
+              fun openSettings() {
+                  drawerOpen = false
+                  context.startActivity(Intent(context, SettingsActivity::class.java))
+              }
+
+              val homeApps = home.mapNotNull { p -> apps.firstOrNull { it.pkg == p } }.take(MAX_HOME)
+              val dockApps = dock.mapNotNull { p -> apps.firstOrNull { it.pkg == p } }
+
+              Box(Modifier.fillMaxSize().systemBarsPadding()) {
+                  Column(
+                      Modifier
+                          .fillMaxSize()
+                          .padding(horizontal = 16.dp)
+                          .pointerInput(Unit) {
+                              var dy = 0f
+                              detectVerticalDragGestures(
+                                  onDragStart = { dy = 0f },
+                                  onVerticalDrag = { _, d -> dy += d },
+                                  onDragEnd = { if (dy < -150f) drawerOpen = true }
+                              )
+                          }
+                  ) {
+                      Spacer(Modifier.height(16.dp))
+                      HomeHeader(
+                          pal, clockSize, clockWeight, clock24, showCard,
+                          Modifier
+                              .fillMaxWidth()
+                              .pointerInput(Unit) {
+                                  detectTapGestures(onTap = { openSettings() })
+                              }
+                      )
+
+                      Column(Modifier.weight(1f).fillMaxWidth().padding(top = 18.dp)) {
+                          for (r in 0 until ROWS) {
+                              Row(Modifier.fillMaxWidth().weight(1f)) {
+                                  for (c in 0 until COLS) {
+                                      val app = homeApps.getOrNull(r * COLS + c)
+                                      Box(
+                                          Modifier.weight(1f).fillMaxHeight(),
+                                          contentAlignment = Alignment.TopCenter
+                                      ) {
+                                          if (app != null) {
+                                              AppCell(app, pal, true, iconSize, { launch(app.pkg) }, { menuApp = app })
+                                          }
+                                      }
+                                  }
+                              }
+                          }
+                      }
+
+                      if (dockApps.isNotEmpty()) {
+                          Dock(dockApps, pal, iconSize, launch, { menuApp = it }, Modifier.padding(vertical = 12.dp))
+                      }
+                  }
+
+                  if (drawerOpen) {
+                      Drawer(
+                          apps, pal, darkText, iconSize,
+                          { pkg -> drawerOpen = false; launch(pkg) },
+                          { menuApp = it },
+                          { openSettings() }
+                      )
+                  }
+              }
+
+              BackHandler(enabled = drawerOpen) { drawerOpen = false }
+
+              menuApp?.let { app ->
+                  AlertDialog(
+                      onDismissRequest = { menuApp = null },
+                      confirmButton = {},
+                      title = { Text(app.label) },
+                      text = {
+                          Column {
+                              if (app.pkg in home) {
+                                  TextButton(onClick = { home.remove(app.pkg); save(); menuApp = null }) {
+                                      Text("Remove from home screen")
+                                  }
+                              } else if (home.size < MAX_HOME) {
+                                  TextButton(onClick = { home.add(app.pkg); save(); menuApp = null }) {
+                                      Text("Add to home screen")
+                                  }
+                              }
+                              if (app.pkg in dock) {
+                                  TextButton(onClick = { dock.remove(app.pkg); save(); menuApp = null }) {
+                                      Text("Remove from dock")
+                                  }
+                              } else if (dock.size < 4) {
+                                  TextButton(onClick = { dock.add(app.pkg); save(); menuApp = null }) {
+                                      Text("Add to dock")
+                                  }
+                              }
+                          }
+                      }
+                  )
+              }
+          }
+
+          // Date line, big clock and a white info card, like the ColorOS 17 home screen.
+          // Tap it to open the launcher settings.
+          @Composable
+          fun HomeHeader(
+              pal: Palette,
+              clockSize: Float,
+              clockWeight: Int,
+              is24: Boolean,
+              showCard: Boolean,
+              modifier: Modifier = Modifier
+          ) {
+              val context = LocalContext.current
+              var now by remember { mutableStateOf(LocalDateTime.now()) }
+              var battery by remember { mutableIntStateOf(0) }
+              LaunchedEffect(Unit) {
+                  val bm = context.getSystemService(Context.BATTERY_SERVICE) as BatteryManager
+                  while (true) {
+                      now = LocalDateTime.now()
+                      battery = bm.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY)
+                      delay(5_000)
+                  }
+              }
+              val fw = when (clockWeight) {
+                  0 -> FontWeight.Light
+                  2 -> FontWeight.Bold
+                  else -> FontWeight.SemiBold
+              }
+              Column(modifier, horizontalAlignment = Alignment.CenterHorizontally) {
+                  Text(
+                      now.format(DateTimeFormatter.ofPattern("EEE, MMM d")),
+                      style = pal.label.copy(fontSize = 16.sp)
+                  )
+                  Text(
+                      now.format(DateTimeFormatter.ofPattern(if (is24) "HH:mm" else "h:mm")),
+                      style = pal.label.copy(
+                          fontSize = clockSize.sp,
+                          fontWeight = fw,
+                          lineHeight = (clockSize + 4f).sp
+                      )
+                  )
+                  if (showCard) {
+                      Spacer(Modifier.height(10.dp))
+                      Column(
+                          Modifier
+                              .fillMaxWidth()
+                              .clip(RoundedCornerShape(24.dp))
+                              .background(Color.White.copy(alpha = 0.94f))
+                              .padding(horizontal = 18.dp, vertical = 14.dp)
+                      ) {
+                          Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                              Text(
+                                  now.format(DateTimeFormatter.ofPattern("EEEE")),
+                                  color = Color(0xFF1E6BFF),
+                                  fontSize = 20.sp,
+                                  fontWeight = FontWeight.SemiBold,
+                                  modifier = Modifier.weight(1f)
+                              )
+                              Text(
+                                  battery.toString() + "%",
+                                  color = Color(0xFF3C3C3C),
+                                  fontSize = 16.sp,
+                                  fontWeight = FontWeight.Medium
+                              )
+                          }
+                          Spacer(Modifier.height(2.dp))
+                          Text(
+                              now.format(DateTimeFormatter.ofPattern("d MMMM yyyy")),
+                              color = Color(0xFF8A8A8A),
+                              fontSize = 13.sp
+                          )
+                      }
+                  }
+              }
+          }
+
+          @Composable
+          fun AppCell(
+              app: App,
+              pal: Palette,
+              showLabel: Boolean,
+              iconSize: Dp,
+              onClick: () -> Unit,
+              onLong: () -> Unit,
+              modifier: Modifier = Modifier
+          ) {
+              var pressed by remember { mutableStateOf(false) }
+              val scale by animateFloatAsState(
+                  targetValue = if (pressed) 0.75f else 1f,
+                  animationSpec = spring(
+                      dampingRatio = Spring.DampingRatioHighBouncy,
+                      stiffness = Spring.StiffnessMediumLow
+                  ),
+                  label = "bounce"
+              )
+              Column(
+                  modifier
+                      .scale(scale)
+                      .pointerInput(app.pkg) {
+                          detectTapGestures(
+                              onPress = {
+                                  pressed = true
+                                  tryAwaitRelease()
+                                  pressed = false
+                              },
+                              onTap = { onClick() },
+                              onLongPress = { onLong() }
+                          )
+                      },
+                  horizontalAlignment = Alignment.CenterHorizontally
+              ) {
+                  AppIcon(app, iconSize)
+                  if (showLabel) {
+                      Spacer(Modifier.height(6.dp))
+                      Text(
+                          app.label,
+                          style = pal.label.copy(fontSize = 11.sp, textAlign = TextAlign.Center),
+                          maxLines = 1,
+                          overflow = TextOverflow.Ellipsis
+                      )
+                  }
+              }
+          }
+
+          // Slide a finger across the dock and the icons swell under it.
+          @Composable
+          fun Dock(
+              items: List<App>,
+              pal: Palette,
+              iconSize: Dp,
+              launch: (String) -> Unit,
+              onLong: (App) -> Unit,
+              modifier: Modifier = Modifier
+          ) {
+              val centers = remember { mutableStateMapOf<String, Float>() }
+              var touchX by remember { mutableStateOf<Float?>(null) }
+              Row(
+                  modifier
+                      .fillMaxWidth()
+                      .pointerInput(Unit) {
+                          detectDragGestures(
+                              onDragStart = { touchX = it.x },
+                              onDrag = { change, _ -> touchX = change.position.x },
+                              onDragEnd = { touchX = null },
+                              onDragCancel = { touchX = null }
+                          )
+                      },
+                  horizontalArrangement = Arrangement.SpaceEvenly
+              ) {
+                  items.forEach { app ->
+                      val tx = touchX
+                      val cx = centers[app.pkg]
+                      val target = if (tx != null && cx != null) {
+                          1f + 0.4f * (1f - (abs(cx - tx) / 180f).coerceAtMost(1f))
+                      } else 1f
+                      val s by animateFloatAsState(
+                          targetValue = target,
+                          animationSpec = spring(
+                              dampingRatio = Spring.DampingRatioMediumBouncy,
+                              stiffness = Spring.StiffnessMedium
+                          ),
+                          label = "magnify"
+                      )
+                      AppCell(
+                          app, pal, false, iconSize, { launch(app.pkg) }, { onLong(app) },
+                          Modifier
+                              .onGloballyPositioned {
+                                  centers[app.pkg] = it.positionInParent().x + it.size.width / 2f
+                              }
+                              .graphicsLayer {
+                                  scaleX = s
+                                  scaleY = s
+                                  translationY = -(s - 1f) * 50f
+                              }
+                      )
+                  }
+              }
+          }
+
+          @Composable
+          fun Drawer(
+              apps: List<App>,
+              pal: Palette,
+              darkText: Boolean,
+              iconSize: Dp,
+              launch: (String) -> Unit,
+              onLong: (App) -> Unit,
+              onSettings: () -> Unit
+          ) {
+              var query by remember { mutableStateOf("") }
+              val shown = apps.filter { it.label.contains(query, ignoreCase = true) }
+              Column(
+                  Modifier
+                      .fillMaxSize()
+                      .background(if (darkText) Color.White.copy(alpha = 0.8f) else Color.Black.copy(alpha = 0.72f))
+                      .pointerInput(Unit) {}
+                      .padding(horizontal = 16.dp)
+              ) {
+                  Spacer(Modifier.height(16.dp))
+                  Row(verticalAlignment = Alignment.CenterVertically) {
+                      BasicTextField(
+                          value = query,
+                          onValueChange = { query = it },
+                          singleLine = true,
+                          textStyle = TextStyle(color = pal.fg, fontSize = 16.sp),
+                          cursorBrush = SolidColor(pal.fg),
+                          modifier = Modifier.weight(1f),
+                          decorationBox = { inner ->
+                              Box(
+                                  Modifier
+                                      .fillMaxWidth()
+                                      .clip(RoundedCornerShape(28.dp))
+                                      .background(pal.glass)
+                                      .border(1.dp, pal.border, RoundedCornerShape(28.dp))
+                                      .padding(horizontal = 20.dp, vertical = 14.dp)
+                              ) {
+                                  if (query.isEmpty()) {
+                                      Text("Search apps", color = pal.fg.copy(alpha = 0.7f), fontSize = 16.sp)
+                                  }
+                                  inner()
+                              }
+                          }
+                      )
+                      TextButton(onClick = onSettings) { Text("Settings", color = pal.fg) }
+                  }
+                  LazyVerticalGrid(
+                      columns = GridCells.Fixed(4),
+                      modifier = Modifier.weight(1f),
+                      contentPadding = PaddingValues(vertical = 8.dp)
+                  ) {
+                      items(shown, key = { it.pkg }) { app ->
+                          AppCell(
+                              app, pal, true, iconSize, { launch(app.pkg) }, { onLong(app) },
+                              Modifier.padding(vertical = 10.dp)
+                          )
+                      }
+                  }
+              }
+          }
+
+          @Composable
+          fun AppIcon(app: App, size: Dp) {
+              val image = remember(app.pkg) { toImage(app.drawable) }
+              Image(
+                  bitmap = image,
+                  contentDescription = app.label,
+                  modifier = Modifier.size(size).clip(RoundedCornerShape(size * 0.27f))
+              )
+          }
+
+          // Adaptive icons have a transparent margin; crop it so icons fill the rounded square.
+          fun toImage(d: Drawable): ImageBitmap {
+              val size = 192
+              val bmp: Bitmap = d.toBitmap(size, size)
+              if (d is AdaptiveIconDrawable) {
+                  val inset = size / 6
+                  return Bitmap.createBitmap(bmp, inset, inset, size - 2 * inset, size - 2 * inset)
+                      .asImageBitmap()
+              }
+              return bmp.asImageBitmap()
+          }
+          EOF
+
+      - name: Build APK
+        run: gradle assembleDebug
+
+      - name: Publish APK as a release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: settings-${{ github.run_number }}
+          name: Settings build ${{ github.run_number }}
+          files: app/build/outputs/apk/debug/app-debug.apk
