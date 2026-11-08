@@ -1,0 +1,673 @@
+name: Build Launcher v3
+
+on:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.7'
+
+      - name: Create project files
+        run: |
+          mkdir -p app/src/main/java/com/example/mylauncher
+          mkdir -p app/src/main/res/values
+
+          cat > settings.gradle.kts <<'EOF'
+          pluginManagement {
+              repositories {
+                  google()
+                  mavenCentral()
+                  gradlePluginPortal()
+              }
+          }
+          dependencyResolutionManagement {
+              repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+              repositories {
+                  google()
+                  mavenCentral()
+              }
+          }
+          rootProject.name = "MyLauncher"
+          include(":app")
+          EOF
+
+          cat > build.gradle.kts <<'EOF'
+          plugins {
+              id("com.android.application") version "8.5.2" apply false
+              id("org.jetbrains.kotlin.android") version "1.9.24" apply false
+          }
+          EOF
+
+          cat > gradle.properties <<'EOF'
+          android.useAndroidX=true
+          org.gradle.jvmargs=-Xmx3g
+          EOF
+
+          cat > app/build.gradle.kts <<'EOF'
+          plugins {
+              id("com.android.application")
+              id("org.jetbrains.kotlin.android")
+          }
+
+          android {
+              namespace = "com.example.mylauncher"
+              compileSdk = 34
+
+              defaultConfig {
+                  applicationId = "com.example.mylauncher"
+                  minSdk = 26
+                  targetSdk = 34
+                  versionCode = 3
+                  versionName = "3.0"
+              }
+
+              compileOptions {
+                  sourceCompatibility = JavaVersion.VERSION_17
+                  targetCompatibility = JavaVersion.VERSION_17
+              }
+              kotlinOptions { jvmTarget = "17" }
+
+              buildFeatures { compose = true }
+              composeOptions { kotlinCompilerExtensionVersion = "1.5.14" }
+          }
+
+          dependencies {
+              implementation(platform("androidx.compose:compose-bom:2024.06.00"))
+              implementation("androidx.compose.ui:ui")
+              implementation("androidx.compose.foundation:foundation")
+              implementation("androidx.compose.material3:material3")
+              implementation("androidx.activity:activity-compose:1.9.0")
+              implementation("androidx.core:core-ktx:1.13.1")
+          }
+          EOF
+
+          cat > app/src/main/res/values/themes.xml <<'EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <resources>
+              <style name="Theme.MyLauncher" parent="android:Theme.Material.NoActionBar">
+                  <item name="android:windowShowWallpaper">true</item>
+                  <item name="android:windowBackground">@android:color/transparent</item>
+                  <item name="android:statusBarColor">@android:color/transparent</item>
+                  <item name="android:navigationBarColor">@android:color/transparent</item>
+              </style>
+          </resources>
+          EOF
+
+          cat > app/src/main/AndroidManifest.xml <<'EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+              <queries>
+                  <intent>
+                      <action android:name="android.intent.action.MAIN" />
+                      <category android:name="android.intent.category.LAUNCHER" />
+                  </intent>
+              </queries>
+
+              <application
+                  android:label="MyLauncher"
+                  android:theme="@style/Theme.MyLauncher">
+                  <activity
+                      android:name=".MainActivity"
+                      android:exported="true"
+                      android:launchMode="singleTask"
+                      android:stateNotNeeded="true">
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN" />
+                          <category android:name="android.intent.category.HOME" />
+                          <category android:name="android.intent.category.DEFAULT" />
+                      </intent-filter>
+                  </activity>
+              </application>
+          </manifest>
+          EOF
+
+          cat > app/src/main/java/com/example/mylauncher/MainActivity.kt <<'EOF'
+          package com.example.mylauncher
+
+          import android.app.WallpaperColors
+          import android.app.WallpaperManager
+          import android.content.Intent
+          import android.content.SharedPreferences
+          import android.graphics.Bitmap
+          import android.graphics.drawable.AdaptiveIconDrawable
+          import android.graphics.drawable.Drawable
+          import android.os.Build
+          import android.os.Bundle
+          import android.widget.Toast
+          import androidx.activity.ComponentActivity
+          import androidx.activity.compose.BackHandler
+          import androidx.activity.compose.setContent
+          import androidx.activity.enableEdgeToEdge
+          import androidx.compose.animation.core.Spring
+          import androidx.compose.animation.core.animateFloatAsState
+          import androidx.compose.animation.core.spring
+          import androidx.compose.foundation.ExperimentalFoundationApi
+          import androidx.compose.foundation.Image
+          import androidx.compose.foundation.background
+          import androidx.compose.foundation.border
+          import androidx.compose.foundation.clickable
+          import androidx.compose.foundation.gestures.detectDragGestures
+          import androidx.compose.foundation.gestures.detectTapGestures
+          import androidx.compose.foundation.gestures.detectVerticalDragGestures
+          import androidx.compose.foundation.layout.*
+          import androidx.compose.foundation.lazy.grid.GridCells
+          import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+          import androidx.compose.foundation.lazy.grid.items
+          import androidx.compose.foundation.pager.HorizontalPager
+          import androidx.compose.foundation.pager.rememberPagerState
+          import androidx.compose.foundation.shape.CircleShape
+          import androidx.compose.foundation.shape.RoundedCornerShape
+          import androidx.compose.foundation.text.BasicTextField
+          import androidx.compose.material3.*
+          import androidx.compose.runtime.*
+          import androidx.compose.ui.Alignment
+          import androidx.compose.ui.Modifier
+          import androidx.compose.ui.draw.clip
+          import androidx.compose.ui.draw.scale
+          import androidx.compose.ui.geometry.Offset
+          import androidx.compose.ui.graphics.*
+          import androidx.compose.ui.input.pointer.pointerInput
+          import androidx.compose.ui.layout.onGloballyPositioned
+          import androidx.compose.ui.layout.positionInParent
+          import androidx.compose.ui.platform.LocalContext
+          import androidx.compose.ui.text.TextStyle
+          import androidx.compose.ui.text.font.FontWeight
+          import androidx.compose.ui.text.style.TextAlign
+          import androidx.compose.ui.text.style.TextOverflow
+          import androidx.compose.ui.unit.Dp
+          import androidx.compose.ui.unit.dp
+          import androidx.compose.ui.unit.sp
+          import androidx.core.graphics.ColorUtils
+          import androidx.core.graphics.drawable.toBitmap
+          import kotlinx.coroutines.delay
+          import java.time.LocalDateTime
+          import java.time.format.DateTimeFormatter
+          import kotlin.math.abs
+          import kotlin.math.absoluteValue
+
+          class App(val label: String, val pkg: String, val drawable: Drawable)
+
+          class Palette(val fg: Color, val glass: Color, val border: Color, val label: TextStyle)
+
+          private const val COLS = 4
+          private const val PER_PAGE = 16
+
+          fun readList(prefs: SharedPreferences, key: String): List<String>? =
+              prefs.getString(key, null)?.split(",")?.filter { it.isNotEmpty() }
+
+          class MainActivity : ComponentActivity() {
+              private val apps = mutableStateOf<List<App>>(emptyList())
+              private val lightWallpaper = mutableStateOf(false)
+              private var loaded: Set<String> = emptySet()
+
+              override fun onCreate(savedInstanceState: Bundle?) {
+                  super.onCreate(savedInstanceState)
+                  enableEdgeToEdge()
+                  refresh()
+                  val prefs = getSharedPreferences("launcher", MODE_PRIVATE)
+                  setContent {
+                      MaterialTheme(colorScheme = darkColorScheme()) {
+                          Launcher(apps.value, lightWallpaper.value, prefs) { pkg ->
+                              packageManager.getLaunchIntentForPackage(pkg)?.let { startActivity(it) }
+                          }
+                      }
+                  }
+              }
+
+              override fun onResume() {
+                  super.onResume()
+                  refresh()
+              }
+
+              private fun refresh() {
+                  val pm = packageManager
+                  val infos = pm.queryIntentActivities(
+                      Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER), 0
+                  )
+                  val pkgs = infos.map { it.activityInfo.packageName }.toSet()
+                  if (pkgs != loaded) {
+                      loaded = pkgs
+                      apps.value = infos
+                          .map { App(it.loadLabel(pm).toString(), it.activityInfo.packageName, it.loadIcon(pm)) }
+                          .filter { it.pkg != packageName }
+                          .distinctBy { it.pkg }
+                          .sortedBy { it.label.lowercase() }
+                  }
+                  lightWallpaper.value = isWallpaperLight()
+              }
+
+              // Light wallpaper -> dark labels. Needs Android 8.1+; otherwise stays white.
+              private fun isWallpaperLight(): Boolean {
+                  if (Build.VERSION.SDK_INT < 27) return false
+                  val colors = WallpaperManager.getInstance(this)
+                      .getWallpaperColors(WallpaperManager.FLAG_SYSTEM) ?: return false
+                  return if (Build.VERSION.SDK_INT >= 31) {
+                      (colors.colorHints and WallpaperColors.HINT_SUPPORTS_DARK_TEXT) != 0
+                  } else {
+                      ColorUtils.calculateLuminance(colors.primaryColor.toArgb()) > 0.55
+                  }
+              }
+          }
+
+          @OptIn(ExperimentalFoundationApi::class)
+          @Composable
+          fun Launcher(
+              apps: List<App>,
+              lightWallpaper: Boolean,
+              prefs: SharedPreferences,
+              launch: (String) -> Unit
+          ) {
+              val context = LocalContext.current
+
+              // 0 = auto (follows wallpaper), 1 = white labels, 2 = dark labels
+              var mode by remember { mutableIntStateOf(prefs.getInt("labels", 0)) }
+              val darkText = when (mode) { 1 -> false; 2 -> true; else -> lightWallpaper }
+              val fg = if (darkText) Color(0xFF111111) else Color.White
+              val pal = Palette(
+                  fg = fg,
+                  glass = if (darkText) Color.Black.copy(alpha = 0.10f) else Color.White.copy(alpha = 0.20f),
+                  border = if (darkText) Color.Black.copy(alpha = 0.18f) else Color.White.copy(alpha = 0.35f),
+                  label = TextStyle(
+                      color = fg,
+                      shadow = if (darkText) null else Shadow(Color.Black.copy(alpha = 0.6f), Offset(0f, 2f), 6f)
+                  )
+              )
+
+              val dock = remember {
+                  mutableStateListOf<String>().apply {
+                      addAll(
+                          readList(prefs, "dock")
+                              ?: listOf("dialer", "messag", "chrome", "camera")
+                                  .mapNotNull { k -> apps.firstOrNull { it.pkg.contains(k) }?.pkg }
+                      )
+                  }
+              }
+              val home = remember {
+                  mutableStateListOf<String>().apply {
+                      addAll(readList(prefs, "home") ?: apps.map { it.pkg }.filter { it !in dock }.take(12))
+                  }
+              }
+              var drawerOpen by remember { mutableStateOf(false) }
+              var menuApp by remember { mutableStateOf<App?>(null) }
+
+              fun save() {
+                  prefs.edit()
+                      .putString("dock", dock.joinToString(","))
+                      .putString("home", home.joinToString(","))
+                      .apply()
+              }
+
+              val homeApps = home.mapNotNull { p -> apps.firstOrNull { it.pkg == p } }
+              val pages = homeApps.chunked(PER_PAGE).ifEmpty { listOf(emptyList()) }
+              val pagerState = rememberPagerState(pageCount = { pages.size })
+              val dockApps = dock.mapNotNull { p -> apps.firstOrNull { it.pkg == p } }
+
+              Box(Modifier.fillMaxSize().systemBarsPadding()) {
+                  Column(
+                      Modifier
+                          .fillMaxSize()
+                          .padding(horizontal = 16.dp)
+                          .pointerInput(Unit) {
+                              var dy = 0f
+                              detectVerticalDragGestures(
+                                  onDragStart = { dy = 0f },
+                                  onVerticalDrag = { _, d -> dy += d },
+                                  onDragEnd = { if (dy < -150f) drawerOpen = true }
+                              )
+                          }
+                  ) {
+                      Spacer(Modifier.height(24.dp))
+                      Clock(
+                          pal,
+                          Modifier
+                              .align(Alignment.CenterHorizontally)
+                              .pointerInput(Unit) {
+                                  detectTapGestures(onTap = {
+                                      mode = (mode + 1) % 3
+                                      prefs.edit().putInt("labels", mode).apply()
+                                      val names = listOf("Label colors: auto", "Label colors: white", "Label colors: dark")
+                                      Toast.makeText(context, names[mode], Toast.LENGTH_SHORT).show()
+                                  })
+                              }
+                      )
+                      Spacer(Modifier.height(20.dp))
+
+                      Box(
+                          Modifier
+                              .fillMaxWidth()
+                              .clip(RoundedCornerShape(28.dp))
+                              .background(pal.glass)
+                              .border(1.dp, pal.border, RoundedCornerShape(28.dp))
+                              .clickable { drawerOpen = true }
+                              .padding(horizontal = 20.dp, vertical = 14.dp)
+                      ) {
+                          Text("Search apps", color = pal.fg.copy(alpha = 0.7f), fontSize = 16.sp)
+                      }
+
+                      HorizontalPager(
+                          state = pagerState,
+                          modifier = Modifier.weight(1f).fillMaxWidth()
+                      ) { page ->
+                          val items = pages.getOrElse(page) { emptyList() }
+                          Column(
+                              Modifier
+                                  .fillMaxSize()
+                                  .graphicsLayer {
+                                      val off = ((pagerState.currentPage - page) + pagerState.currentPageOffsetFraction)
+                                          .absoluteValue.coerceIn(0f, 1f)
+                                      scaleX = 1f - 0.15f * off
+                                      scaleY = scaleX
+                                      alpha = 1f - 0.7f * off
+                                  }
+                                  .padding(top = 12.dp)
+                          ) {
+                              for (r in 0 until PER_PAGE / COLS) {
+                                  Row(Modifier.fillMaxWidth().weight(1f)) {
+                                      for (c in 0 until COLS) {
+                                          val app = items.getOrNull(r * COLS + c)
+                                          Box(
+                                              Modifier.weight(1f).fillMaxHeight(),
+                                              contentAlignment = Alignment.TopCenter
+                                          ) {
+                                              if (app != null) {
+                                                  AppCell(app, pal, true, { launch(app.pkg) }, { menuApp = app })
+                                              }
+                                          }
+                                      }
+                                  }
+                              }
+                          }
+                      }
+
+                      if (pages.size > 1) {
+                          Row(
+                              Modifier.align(Alignment.CenterHorizontally).padding(8.dp),
+                              horizontalArrangement = Arrangement.spacedBy(8.dp)
+                          ) {
+                              repeat(pages.size) { i ->
+                                  val active = i == pagerState.currentPage
+                                  Box(
+                                      Modifier
+                                          .size(if (active) 8.dp else 6.dp)
+                                          .clip(CircleShape)
+                                          .background(pal.fg.copy(alpha = if (active) 0.95f else 0.4f))
+                                  )
+                              }
+                          }
+                      }
+
+                      if (dockApps.isNotEmpty()) {
+                          Dock(
+                              dockApps, pal, launch, { menuApp = it },
+                              Modifier.align(Alignment.CenterHorizontally).padding(vertical = 12.dp)
+                          )
+                      }
+                  }
+
+                  if (drawerOpen) {
+                      Drawer(apps, pal, darkText, { pkg -> drawerOpen = false; launch(pkg) }, { menuApp = it })
+                  }
+              }
+
+              BackHandler(enabled = drawerOpen) { drawerOpen = false }
+
+              menuApp?.let { app ->
+                  AlertDialog(
+                      onDismissRequest = { menuApp = null },
+                      confirmButton = {},
+                      title = { Text(app.label) },
+                      text = {
+                          Column {
+                              if (app.pkg in home) {
+                                  TextButton(onClick = { home.remove(app.pkg); save(); menuApp = null }) {
+                                      Text("Remove from home screen")
+                                  }
+                              } else {
+                                  TextButton(onClick = { home.add(app.pkg); save(); menuApp = null }) {
+                                      Text("Add to home screen")
+                                  }
+                              }
+                              if (app.pkg in dock) {
+                                  TextButton(onClick = { dock.remove(app.pkg); save(); menuApp = null }) {
+                                      Text("Remove from dock")
+                                  }
+                              } else if (dock.size < 4) {
+                                  TextButton(onClick = { dock.add(app.pkg); save(); menuApp = null }) {
+                                      Text("Add to dock")
+                                  }
+                              }
+                          }
+                      }
+                  )
+              }
+          }
+
+          @Composable
+          fun Clock(pal: Palette, modifier: Modifier = Modifier) {
+              var now by remember { mutableStateOf(LocalDateTime.now()) }
+              LaunchedEffect(Unit) {
+                  while (true) {
+                      now = LocalDateTime.now()
+                      delay(5_000)
+                  }
+              }
+              Column(modifier, horizontalAlignment = Alignment.CenterHorizontally) {
+                  Text(
+                      now.format(DateTimeFormatter.ofPattern("HH:mm")),
+                      style = pal.label.copy(fontSize = 72.sp, fontWeight = FontWeight.Light)
+                  )
+                  Text(
+                      now.format(DateTimeFormatter.ofPattern("EEEE, d MMMM")),
+                      style = pal.label.copy(fontSize = 16.sp)
+                  )
+              }
+          }
+
+          @Composable
+          fun AppCell(
+              app: App,
+              pal: Palette,
+              showLabel: Boolean,
+              onClick: () -> Unit,
+              onLong: () -> Unit,
+              modifier: Modifier = Modifier
+          ) {
+              var pressed by remember { mutableStateOf(false) }
+              val scale by animateFloatAsState(
+                  targetValue = if (pressed) 0.75f else 1f,
+                  animationSpec = spring(
+                      dampingRatio = Spring.DampingRatioHighBouncy,
+                      stiffness = Spring.StiffnessMediumLow
+                  ),
+                  label = "bounce"
+              )
+              Column(
+                  modifier
+                      .scale(scale)
+                      .pointerInput(app.pkg) {
+                          detectTapGestures(
+                              onPress = {
+                                  pressed = true
+                                  tryAwaitRelease()
+                                  pressed = false
+                              },
+                              onTap = { onClick() },
+                              onLongPress = { onLong() }
+                          )
+                      },
+                  horizontalAlignment = Alignment.CenterHorizontally
+              ) {
+                  AppIcon(app, 58.dp)
+                  if (showLabel) {
+                      Spacer(Modifier.height(6.dp))
+                      Text(
+                          app.label,
+                          style = pal.label.copy(fontSize = 12.sp, textAlign = TextAlign.Center),
+                          maxLines = 1,
+                          overflow = TextOverflow.Ellipsis
+                      )
+                  }
+              }
+          }
+
+          // Slide a finger across the dock and the icons swell under it.
+          @Composable
+          fun Dock(
+              items: List<App>,
+              pal: Palette,
+              launch: (String) -> Unit,
+              onLong: (App) -> Unit,
+              modifier: Modifier = Modifier
+          ) {
+              val centers = remember { mutableStateMapOf<String, Float>() }
+              var touchX by remember { mutableStateOf<Float?>(null) }
+              Row(
+                  modifier
+                      .background(pal.glass, RoundedCornerShape(36.dp))
+                      .border(1.dp, pal.border, RoundedCornerShape(36.dp))
+                      .padding(horizontal = 18.dp, vertical = 14.dp)
+                      .pointerInput(Unit) {
+                          detectDragGestures(
+                              onDragStart = { touchX = it.x },
+                              onDrag = { change, _ -> touchX = change.position.x },
+                              onDragEnd = { touchX = null },
+                              onDragCancel = { touchX = null }
+                          )
+                      },
+                  horizontalArrangement = Arrangement.spacedBy(20.dp)
+              ) {
+                  items.forEach { app ->
+                      val tx = touchX
+                      val cx = centers[app.pkg]
+                      val target = if (tx != null && cx != null) {
+                          1f + 0.4f * (1f - (abs(cx - tx) / 180f).coerceAtMost(1f))
+                      } else 1f
+                      val s by animateFloatAsState(
+                          targetValue = target,
+                          animationSpec = spring(
+                              dampingRatio = Spring.DampingRatioMediumBouncy,
+                              stiffness = Spring.StiffnessMedium
+                          ),
+                          label = "magnify"
+                      )
+                      AppCell(
+                          app, pal, false, { launch(app.pkg) }, { onLong(app) },
+                          Modifier
+                              .onGloballyPositioned {
+                                  centers[app.pkg] = it.positionInParent().x + it.size.width / 2f
+                              }
+                              .graphicsLayer {
+                                  scaleX = s
+                                  scaleY = s
+                                  translationY = -(s - 1f) * 50f
+                              }
+                      )
+                  }
+              }
+          }
+
+          @Composable
+          fun Drawer(
+              apps: List<App>,
+              pal: Palette,
+              darkText: Boolean,
+              launch: (String) -> Unit,
+              onLong: (App) -> Unit
+          ) {
+              var query by remember { mutableStateOf("") }
+              val shown = apps.filter { it.label.contains(query, ignoreCase = true) }
+              Column(
+                  Modifier
+                      .fillMaxSize()
+                      .background(if (darkText) Color.White.copy(alpha = 0.8f) else Color.Black.copy(alpha = 0.72f))
+                      .pointerInput(Unit) {}
+                      .padding(horizontal = 16.dp)
+              ) {
+                  Spacer(Modifier.height(16.dp))
+                  BasicTextField(
+                      value = query,
+                      onValueChange = { query = it },
+                      singleLine = true,
+                      textStyle = TextStyle(color = pal.fg, fontSize = 16.sp),
+                      cursorBrush = SolidColor(pal.fg),
+                      modifier = Modifier.fillMaxWidth(),
+                      decorationBox = { inner ->
+                          Box(
+                              Modifier
+                                  .fillMaxWidth()
+                                  .clip(RoundedCornerShape(28.dp))
+                                  .background(pal.glass)
+                                  .border(1.dp, pal.border, RoundedCornerShape(28.dp))
+                                  .padding(horizontal = 20.dp, vertical = 14.dp)
+                          ) {
+                              if (query.isEmpty()) {
+                                  Text("Search apps", color = pal.fg.copy(alpha = 0.7f), fontSize = 16.sp)
+                              }
+                              inner()
+                          }
+                      }
+                  )
+                  LazyVerticalGrid(
+                      columns = GridCells.Fixed(4),
+                      modifier = Modifier.weight(1f),
+                      contentPadding = PaddingValues(vertical = 8.dp)
+                  ) {
+                      items(shown, key = { it.pkg }) { app ->
+                          AppCell(
+                              app, pal, true, { launch(app.pkg) }, { onLong(app) },
+                              Modifier.padding(vertical = 10.dp)
+                          )
+                      }
+                  }
+              }
+          }
+
+          @Composable
+          fun AppIcon(app: App, size: Dp) {
+              val image = remember(app.pkg) { toImage(app.drawable) }
+              Image(
+                  bitmap = image,
+                  contentDescription = app.label,
+                  modifier = Modifier.size(size).clip(RoundedCornerShape(size * 0.28f))
+              )
+          }
+
+          // Adaptive icons have a transparent margin; crop it so icons fill the rounded square.
+          fun toImage(d: Drawable): ImageBitmap {
+              val size = 192
+              val bmp: Bitmap = d.toBitmap(size, size)
+              if (d is AdaptiveIconDrawable) {
+                  val inset = size / 6
+                  return Bitmap.createBitmap(bmp, inset, inset, size - 2 * inset, size - 2 * inset)
+                      .asImageBitmap()
+              }
+              return bmp.asImageBitmap()
+          }
+          EOF
+
+      - name: Build APK
+        run: gradle assembleDebug
+
+      - name: Publish APK as a release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: launcher-${{ github.run_number }}
+          name: Launcher build ${{ github.run_number }}
+          files: app/build/outputs/apk/debug/app-debug.apk
